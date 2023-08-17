@@ -1,7 +1,8 @@
 #include "aes.h"
-
+#include "helperFunctions.h"
 
 //SOURCE: https://pastebin.com/y8377Ra7
+#pragma region AES Reference Tables
 unsigned char s_box[256] = {
     0x63,   0x7c,   0x77,   0x7b,   0xf2,   0x6b,   0x6f,   0xc5,   0x30,   0x01,   0x67,   0x2b,   0xfe,   0xd7,   0xab,   0x76,
     0xca,   0x82,   0xc9,   0x7d,   0xfa,   0x59,   0x47,   0xf0,   0xad,   0xd4,   0xa2,   0xaf,   0x9c,   0xa4,   0x72,   0xc0,
@@ -28,3 +29,91 @@ unsigned char mixColMatrix[BLOCK_SIDE][BLOCK_SIDE] = {
     { 0x01, 0x01, 0x02, 0x03 },
     { 0x03, 0x01, 0x01, 0x02 }
 };
+#pragma endregion
+
+//Reference: https://gist.github.com/meagtan/dc1adff8d84bb895891d8fd027ec9d8c 
+//Galois Field multiplication 
+unsigned char MultiplyBytes(unsigned char g1, unsigned char g2) {
+    const int numberBytes = 8;
+    unsigned char result = 0;
+
+    for (size_t i = 0; i < numberBytes; i++)
+    {
+        //if least significant bit is active
+        if (g2 & 0x01)
+            result = result ^ g1; // equals to result += g1 in the extension field
+        
+        g2 >>= 1;
+
+        //if g1 is greater or equal to 128(0x80 in hex, 0100 0000 in bynary) 
+        //we shall reduce it 
+        bool hiBit = (g1 & 0x80);
+        g1 <<= 1; //left shift
+        if (hiBit)
+            g1 ^= 0x1B; // substraction
+    }
+
+    return result;
+}
+
+void addRoundKey(unsigned char state[BLOCK_SIDE][BLOCK_SIDE], unsigned char subkey[BLOCK_SIDE][BLOCK_SIDE]) {
+    for (size_t row = 0; row < BLOCK_SIDE; row++)
+    {
+        for (size_t col = 0; col < BLOCK_SIDE; col++)
+        {
+            state[row][col] = state[row][col] ^ subkey[row][col];
+        }
+    }
+}
+
+/// <summary>
+/// Substitutes each byte using the s-box, defined above
+/// </summary>
+/// <param name="state">
+/// Current state of the matrix
+/// </param>
+void byteSubstitute(unsigned char state[BLOCK_SIDE][BLOCK_SIDE]) {
+    for (size_t row = 0; row < BLOCK_SIDE; row++)
+    {
+        for (size_t col = 0; col < BLOCK_SIDE; col++)
+        {
+            state[row][col] = s_box[state[row][col]];
+        }
+    }
+}
+
+/// <summary>
+/// Rotating each row according to its position in the matrix(row:0 is shifted 0 times, row:1 will be shifted 1 time and so on)
+/// </summary>
+/// <param name="state">Current state of the matrix</param>
+void shiftRows(unsigned char state[BLOCK_SIDE][BLOCK_SIDE]) {
+    for (int row = 0; row < BLOCK_SIDE; row++) {
+        leftShift(state[row], row, BLOCK_SIDE);
+    }
+}
+
+/// <summary>
+/// Each cell of the matrix is transformed to the byte multiplication of mixColMatrix defined above and the current state.
+/// In this way, we mix the columns.(Step 3 of the algorithm)
+/// </summary>
+/// <param name="state">
+/// Current state of the matrix
+/// </param>
+void mixCols(unsigned char state[BLOCK_SIDE][BLOCK_SIDE]) {
+    unsigned char out[BLOCK_SIDE][BLOCK_SIDE];
+
+    //matrix multiplication is used when we mix cols
+    for (size_t row = 0; row < BLOCK_SIDE; row++)
+    {
+        for (size_t col = 0; col < BLOCK_SIDE; col++)
+        {
+            out[row][col] = 0x00;
+            for (size_t i = 0; i < BLOCK_SIDE; i++)
+            {
+                out[row][col] ^= MultiplyBytes(mixColMatrix[row][i], state[i][col]);
+            }
+        }
+    }
+
+    memCopy(out, state);
+}

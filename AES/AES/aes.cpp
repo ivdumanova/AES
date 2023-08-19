@@ -2,7 +2,7 @@
 #include "helperFunctions.h"
 
 //SOURCE: https://pastebin.com/y8377Ra7
-#pragma region AES Reference Tables
+#pragma region AESReferenceTables
 unsigned char s_box[256] = {
     0x63,   0x7c,   0x77,   0x7b,   0xf2,   0x6b,   0x6f,   0xc5,   0x30,   0x01,   0x67,   0x2b,   0xfe,   0xd7,   0xab,   0x76,
     0xca,   0x82,   0xc9,   0x7d,   0xfa,   0x59,   0x47,   0xf0,   0xad,   0xd4,   0xa2,   0xaf,   0x9c,   0xa4,   0x72,   0xc0,
@@ -43,7 +43,6 @@ unsigned char MultiplyBytes(unsigned char g1, unsigned char g2) {
         if (g2 & 0x01)
             result = result ^ g1; // equals to result += g1 in the extension field
         
-        g2 >>= 1;
 
         //if g1 is greater or equal to 128(0x80 in hex, 0100 0000 in bynary) 
         //we shall reduce it 
@@ -51,6 +50,8 @@ unsigned char MultiplyBytes(unsigned char g1, unsigned char g2) {
         g1 <<= 1; //left shift
         if (hiBit)
             g1 ^= 0x1B; // substraction
+        
+        g2 >>= 1;
     }
 
     return result;
@@ -116,4 +117,141 @@ void mixCols(unsigned char state[BLOCK_SIDE][BLOCK_SIDE]) {
     }
 
     memCopy(out, state);
+}
+
+void generateKeySchedule(unsigned char* key, int keylen, unsigned char subkeysArr[][BLOCK_SIDE][BLOCK_SIDE]) {
+    generateKeySchedule128(key, subkeysArr);
+}
+
+/// <summary>
+/// Populates the subkeysArr which we use in the encryption.
+/// </summary>
+/// <param name="key">
+/// The key from which we generate the subkey array.
+/// </param>
+/// <param name="subkeysArr">
+/// Three dimension array for our parameter, in which we store our subkeys.
+/// </param>
+void generateKeySchedule128(unsigned char* key, unsigned char subkeysArr[AES_128_ROUNDS][BLOCK_SIDE][BLOCK_SIDE]) {
+    int counter = 0;
+
+    for (size_t col = 0; col < BLOCK_SIDE; col++)
+    {
+        for (size_t row = 0; row < BLOCK_SIDE; row++)
+        {
+            subkeysArr[0][row][col] = key[counter++];
+        }
+    }
+
+    //Generate each round
+    unsigned char roundCoefficient = 0x01;
+    for (size_t i = 1; i < 10; i++)
+    {
+        //transforms key
+        unsigned char g[4] = {
+              s_box[subkeysArr[i - 1][1][3]] ^ roundCoefficient,
+              s_box[subkeysArr[i - 1][2][3]],
+              s_box[subkeysArr[i - 1][3][3]],
+              s_box[subkeysArr[i - 1][0][3]]
+        };
+
+        for (size_t row = 0; row < BLOCK_SIDE; row++)
+        {
+            subkeysArr[i][row][0] = subkeysArr[i - 1][row][0] ^ g[row];
+        }
+
+        for (size_t col = 1; col < BLOCK_SIDE; col++)
+        {
+            for (size_t row = 0; row < BLOCK_SIDE; row++)
+            {
+                subkeysArr[i][row][col] = subkeysArr[i - 1][row][col] ^ subkeysArr[i][row][col - 1];
+            }
+        }
+
+        //increment round coefficient
+        roundCoefficient = MultiplyBytes(roundCoefficient, 0x02);
+    }
+}
+
+void copyTwoDimensionsIntoOne(unsigned char from[BLOCK_SIDE][BLOCK_SIDE], unsigned char to[BLOCK_LEN]) {
+    int i = 0;
+    for (size_t cols = 0; cols < BLOCK_SIDE; cols++)
+    {
+        for (size_t row = 0; row < BLOCK_SIDE; row++)
+        {
+            to[i++] = from[row][cols];
+        }
+    }
+}
+
+void aes_encrypt_block(unsigned char* text, int n, unsigned char subkeys[][BLOCK_SIDE][BLOCK_SIDE], int nr, unsigned char out[BLOCK_LEN]) {
+    unsigned char state[BLOCK_SIDE][BLOCK_SIDE];
+    int i = 0;
+
+    for (size_t col = 0; col < BLOCK_SIDE; col++)
+    {
+        for (size_t row = 0; row < BLOCK_SIDE; row++)
+        {
+            if (i < n)
+                state[row][col] = text[i++];
+            else
+                state[row][col] = 0;
+        }
+    }
+
+    int round = 0;
+    //ROUND 0
+    addRoundKey(state, subkeys[round++]);
+
+    //ROUNDS 1 to NR-1
+    while(round < nr)
+    {
+        byteSubstitute(state);
+        shiftRows(state);
+        mixCols(state);
+        addRoundKey(state, subkeys[round++]);
+    }
+
+    //Last Round
+    byteSubstitute(state);
+    shiftRows(state);
+    addRoundKey(state, subkeys[nr]);
+
+    copyTwoDimensionsIntoOne(state, out);
+}  
+
+void aes_encrypt(unsigned char* input, int n, unsigned char* key, int keylen, unsigned char** out) {
+    //determine number of rounds
+    if (keylen == AES_256) {
+        /*unsigned  char subkeys[AES_256_NR + 1][BLOCK_SIDE][BLOCK_SIDE];
+
+        generateKeySchedule(key, keylen, subkeys);*/
+    }
+    else {
+        //NR numbers of BLOCK_SIDE*BLOCK_SIDE keys
+        unsigned  char subkeys[AES_128_NR + 1][BLOCK_SIDE][BLOCK_SIDE];
+        generateKeySchedule(key, keylen, subkeys);
+        
+        //1:52:16 move this into a function
+        int noBlocks = (n >> 4) + 1; // n / BLOCK_LENGTH
+        *out = new unsigned char[noBlocks * BLOCK_LEN];
+
+        for (size_t i = 0; i < noBlocks; i++)
+        {
+            aes_encrypt_block(input + (i << 4), BLOCK_LEN, subkeys, AES_128_NR + 1, *out + (i << 4));
+        }
+    }
+}
+
+void deleteThreeDemensionalArray(unsigned char*** arr, int length, int rows, int cols) {
+    for (size_t i = 0; i < length; i++)
+    {
+        for (size_t j = 0; j < length; j++)
+        {
+            delete[] arr[i][j];
+        }
+        delete[] arr[i];
+    }
+
+    delete[] arr;
 }
